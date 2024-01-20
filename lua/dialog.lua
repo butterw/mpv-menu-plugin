@@ -24,64 +24,66 @@ local file_types = {
         { '*.srt', '*.ass', '*.idx', '*.sub', '*.sup', '*.ttxt', '*.txt', '*.ssa', '*.smi', '*.mks' }, ';'),
     playlist = table.concat({ '*.m3u', '*.m3u8', '*.pls', '*.cue' }, ';'),
 }
+local open_action = ''
 
--- set file type filters
-local function update_default_filters()
-    local dialog_filters = {
-        { name = 'All Files (*.*)', spec = '*.*' },
-        { name = 'Video Files',     spec = file_types['video'] },
-        { name = 'Audio Files',     spec = file_types['audio'] },
-        { name = 'Image Files',     spec = file_types['image'] },
-        { name = 'ISO Image Files', spec = file_types['iso'] },
-        { name = 'Subtitle Files',  spec = file_types['subtitle'] },
-        { name = 'Playlist Files',  spec = file_types['playlist'] },
-    }
-    mp.set_property_native('user-data/menu/dialog/filters', dialog_filters)
-end
-
--- open Bluray iso or dir
+-- open bluray iso or dir
 local function open_bluray(path)
     mp.commandv('set', 'bluray-device', path)
     mp.commandv('loadfile', 'bd://')
 end
 
--- open DVD iso or dir
+-- open dvd iso or dir
 local function open_dvd(path)
     mp.commandv('set', 'dvd-device', path)
     mp.commandv('loadfile', 'dvd://')
 end
 
--- open callback with support for Bluray/DVD iso and subtitle file
-local function open_cb(...)
+-- open a single file
+local function open_file(path, append)
+    local ext = path:match('^.+(%..+)$') or ''
     local function check_file_type(ext, type)
         return ext ~= '' and file_types[type]:find(ext)
     end
 
+    -- play iso file directly
+    if check_file_type(ext, 'iso') then
+        local info = utils.file_info(path)
+        if info and info.is_file then
+            if info.size > 4.7 * 1000 * 1000 * 1000 then
+                open_bluray(path)
+            else
+                open_dvd(path)
+            end
+            return
+        end
+    end
+
+    if check_file_type(ext, 'subtitle') then
+        mp.commandv('sub-add', path, 'auto')
+    else
+        mp.commandv('loadfile', path, append and 'append-play' or 'replace')
+    end
+end
+
+-- open callback
+local function open_cb(...)
     for i, v in ipairs({ ... }) do
         local path = tostring(v)
-        local ext = path:match('^.+(%..+)$') or ''
-
-        if check_file_type(ext, 'iso') then
-            local info = utils.file_info(path)
-            if info and info.is_file then
-                if info.size > 4.7 * 1000 * 1000 * 1000 then
-                    open_bluray(path)
-                else
-                    open_dvd(path)
-                end
-                break -- do not load other files
-            end
-        end
-
-        if check_file_type(ext, 'subtitle') then
+        if open_action == 'add-sub' then
             mp.commandv('sub-add', path, 'auto')
+        elseif open_action == 'add-video' then
+            mp.commandv('video-add', path, 'auto')
+        elseif open_action == 'add-audio' then
+            mp.commandv('audio-add', path, 'auto')
+        elseif open_action == 'add-playlist' then
+            mp.commandv('loadfile', path, 'append')
         else
-            mp.commandv('loadfile', path, i > 1 and 'append' or 'replace')
+            open_file(path, i > 1)
         end
     end
 end
 
--- open folder callback with support for Bluray/DVD Folder
+-- open folder callback
 local function open_folder_cb(path)
     if utils.file_info(utils.join_path(path, 'BDMV')) then
         open_bluray(path)
@@ -104,11 +106,58 @@ mp.register_script_message('dialog-open-folder-reply', open_folder_cb)
 mp.register_script_message('clipboard-get-reply', clipboard_cb)
 
 
--- init default file types
-update_default_filters()
+-- add subtitle track
+mp.register_script_message('add-sub', function()
+    open_action = 'add-sub'
+    mp.set_property_native('user-data/menu/dialog/filters', {
+        { name = 'Subtitle Files',  spec = file_types['subtitle'] },
+        { name = 'All Files (*.*)', spec = '*.*' },
+    })
+    mp.commandv('script-message-to', 'menu', 'dialog/open-multi', mp.get_script_name())
+end)
+
+-- add video track
+mp.register_script_message('add-video', function()
+    open_action = 'add-video'
+    mp.set_property_native('user-data/menu/dialog/filters', {
+        { name = 'Video Files',     spec = file_types['video'] },
+        { name = 'All Files (*.*)', spec = '*.*' },
+    })
+    mp.commandv('script-message-to', 'menu', 'dialog/open-multi', mp.get_script_name())
+end)
+
+-- add audio track
+mp.register_script_message('add-audio', function()
+    open_action = 'add-audio'
+    mp.set_property_native('user-data/menu/dialog/filters', {
+        { name = 'Audio Files',     spec = file_types['audio'] },
+        { name = 'All Files (*.*)', spec = '*.*' },
+    })
+    mp.commandv('script-message-to', 'menu', 'dialog/open-multi', mp.get_script_name())
+end)
+
+-- add to playlist
+mp.register_script_message('add-playlist', function()
+    open_action = 'add-playlist'
+    mp.set_property_native('user-data/menu/dialog/filters', {
+        { name = 'Video Files',     spec = file_types['video'] },
+        { name = 'All Files (*.*)', spec = '*.*' },
+    })
+    mp.commandv('script-message-to', 'menu', 'dialog/open-multi', mp.get_script_name())
+end)
 
 -- open dialog
 mp.register_script_message('open', function()
+    open_action = ''
+    mp.set_property_native('user-data/menu/dialog/filters', {
+        { name = 'All Files (*.*)', spec = '*.*' },
+        { name = 'Video Files',     spec = file_types['video'] },
+        { name = 'Audio Files',     spec = file_types['audio'] },
+        { name = 'Image Files',     spec = file_types['image'] },
+        { name = 'ISO Image Files', spec = file_types['iso'] },
+        { name = 'Subtitle Files',  spec = file_types['subtitle'] },
+        { name = 'Playlist Files',  spec = file_types['playlist'] },
+    })
     mp.commandv('script-message-to', 'menu', 'dialog/open-multi', mp.get_script_name())
 end)
 
